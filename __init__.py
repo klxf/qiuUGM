@@ -78,8 +78,19 @@ def save_data():
         json.dump(warningData, f, indent=4)
 
 
-async def sendMsg2Admin(bot, msg):
-    await bot.send_group_msg(group_id=ADMIN_GROUP, message=msg)
+async def sendMsg2Admin(bot, group, msg):
+    await bot.send_group_msg(group_id=GROUP_SETTINGS[str(group)], message=msg)
+
+
+def checkBlackWords(msg: str):
+    logger.info(f"Checking black words in {msg}")
+    for type in blackWords:
+        logger.info(f"Checking {type}...")
+        pattern = re.compile(blackWords[type])
+        match = pattern.search(msg)
+        if match:
+            return type
+    return None
 
 async def fetch_url(session, url):
     async with session.get(url) as response:
@@ -88,56 +99,96 @@ async def fetch_url(session, url):
 
 async def process_links(bot, event, match):
     async with aiohttp.ClientSession() as session:
-        tasks = []
+        atasks = []
+        btasks = []
         for link in match:
-            url = base_url + link
-            tasks.append(fetch_url(session, url))
-        responses = await asyncio.gather(*tasks)
-        for res_json in responses:
+            url = adult_base_url + link
+            atasks.append(fetch_url(session, url))
+        adult_responses = await asyncio.gather(*atasks)
+        for link in match:
+            url = ocr_base_url + link
+            btasks.append(fetch_url(session, url))
+        ocr_responses = await asyncio.gather(*btasks)
+        for res_json in adult_responses:
             if res_json["rating_index"] == 3:
-                if event.user_id not in warningData:
-                    warningData[event.user_id] = 1
+                if str(event.user_id) not in warningData:
+                    warningData[str(event.user_id)] = 1
                 else:
-                    warningData[event.user_id] += 1
+                    warningData[str(event.user_id)] += 1
                 save_data()
                 msg = f"""
-你发送了违规图片，已被警告 {warningData[event.user_id]} 次
-你将被禁止发言 {5*warningData[event.user_id]} 分钟
+你发送了违规图片，已被警告 {warningData[str(event.user_id)]} 次
+你将被禁止发言 {5*warningData[str(event.user_id)]} 分钟
 
 你所发送的内容已留档，若有异议可私聊管理人员申述
 """.strip()
                 await bot.delete_msg(message_id=event.message_id)
-                await bot.set_group_ban(group_id=event.group_id, user_id=event.user_id, duration=5*60*warningData[event.user_id])
-                await msg_handler.send(msg, at_sender=True)
+                if FLAG['MUTE']:
+                    await bot.set_group_ban(group_id=event.group_id, user_id=event.user_id, duration=5*60*warningData[str(event.user_id)])
+
+                if FLAG['REMIND']:
+                    await msg_handler.send(msg, at_sender=True)
+
                 admin_msg = f"""
-{event.user_id} 发送了违规图片，目前已被警告 {warningData[event.user_id]} 次
+{event.user_id} 在 {event.group_id} 发送了违规图片，目前已被警告 {warningData[str(event.user_id)]} 次
+
 发送的违规内容：
 {event.raw_message}
 """.strip()
-                msg_list = {
-                    "type": "node",
-                    "data": {
-                        "name": f"sender",
-                        "uin": f"{event.user_id}",
-                        "content": admin_msg,
-                    },
-                }
-                await bot.send_group_forward_msg(group_id=ADMIN_GROUP, messages=msg_list)
-                # await sendMsg2Admin(bot, admin_msg)
+                if FLAG['FORWARD']:
+                    await sendMsg2Admin(bot, GROUP_SETTINGS[str(event.group_id)], admin_msg)
                 return
+        for res_json in ocr_responses:
+            data = res_json["result"][0]["data"]
+            blackWordType = checkBlackWords(str(data))
+            if blackWordType is not None:
+                if str(event.user_id) not in warningData:
+                    warningData[str(event.user_id)] = 1
+                else:
+                    warningData[str(event.user_id)] += 1
+                save_data()
+                logger.info(f"{event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次")
+                msg = f"""
+你发送了{blackWordType}违规内容，已被警告 {warningData[str(event.user_id)]} 次
+你将被禁止发言 {5 * warningData[str(event.user_id)]} 分钟
+""".strip()
+                await bot.delete_msg(message_id=event.message_id)
+
+                if FLAG['REMIND']:
+                    await msg_handler.send(msg, at_sender=True)
+
+                if FLAG['MUTE']:
+                    await bot.set_group_ban(group_id=event.group_id, user_id=event.user_id, duration=5*60*warningData[str(event.user_id)])
+
+                admin_msg = f"""
+{event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次
+
+违规内容：
+{event.raw_message}
+""".strip()
+                if FLAG['FORWARD']:
+                    await sendMsg2Admin(bot, event.group_id, admin_msg)
 
 
 unionBanData = getUnionBanData()
 warningData = getWarningData()
+blackWords = getBlackWordsData()
 config = getConfig()
-API_URL = config["API_URL"]
+ADULT_API_URL = config["ADULT_API_URL"]
+OCR_API_URL = config["OCR_API_URL"]
 API_KEY = config["API_KEY"]
+GROUP_SETTINGS = config["GROUP_SETTINGS"]
 ADMIN_GROUP = config["ADMIN_GROUP"]
-base_url = str(API_URL) + "/?key=" + str(API_KEY) + "&url="
+FLAG = config["FLAG"]
+adult_base_url = str(ADULT_API_URL) + "/?key=" + str(API_KEY) + "&url="
+ocr_base_url = str(OCR_API_URL) + "/?url="
 
 
 @join_group_handle.handle()
 async def _(bot: Bot, event: GroupIncreaseNoticeEvent):
+    if str(event.group_id) not in GROUP_SETTINGS:
+        return
+
     if str(event.user_id) not in unionBanData:
         return
     else:
@@ -146,19 +197,48 @@ async def _(bot: Bot, event: GroupIncreaseNoticeEvent):
 若需解封请在群管群内使用 /解封 命令
 """.strip()
         await bot.set_group_kick(group_id=event.group_id, user_id=event.user_id)
-        await join_group_handle.send(msg)
+        if FLAG['REMIND']:
+            await join_group_handle.send(msg)
 
 
 @msg_handler.handle()
 async def _(bot: Bot, event: GroupMessageEvent):
-    pattern = r'https://gchat\.qpic\.cn/gchatpic_new/\d+/\d+-\d+-[0-9A-F]+/0'
-    match = re.findall(pattern, event.raw_message)
-    await process_links(bot, event, match)
+    if str(event.group_id) in GROUP_SETTINGS:
+        pattern = r'https://gchat\.qpic\.cn/gchatpic_new/\d+/\d+-\d+-[0-9A-F]+/0'
+        match = re.findall(pattern, event.raw_message)
+        if match:
+            await process_links(bot, event, match)
+
+        blackWordType = checkBlackWords(event.raw_message)
+        if blackWordType is not None:
+            if str(event.user_id) not in warningData:
+                warningData[str(event.user_id)] = 1
+            else:
+                warningData[str(event.user_id)] += 1
+            save_data()
+            logger.info(f"{event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次")
+            msg = f"""
+你发送了{blackWordType}违规内容，已被警告 {warningData[str(event.user_id)]} 次
+你将被禁止发言 {5*warningData[str(event.user_id)]} 分钟
+""".strip()
+            await bot.delete_msg(message_id=event.message_id)
+            if FLAG['REMIND']:
+                await msg_handler.send(msg, at_sender=True)
+            if FLAG['MUTE']:
+                await bot.set_group_ban(group_id=event.group_id, user_id=event.user_id, duration=5*60*warningData[str(event.user_id)])
+            admin_msg = f"""
+{event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次
+
+违规内容：
+{event.raw_message}
+""".strip()
+            if FLAG['FORWARD']:
+                await sendMsg2Admin(bot, event.group_id, admin_msg)
 
 
 @admin_cmd_ban.handle()
 async def _(event: GroupMessageEvent):
-    if event.group_id != ADMIN_GROUP:
+    if event.group_id not in ADMIN_GROUP:
         return
     pattern = re.compile(r"/封禁 (\d+)")
     match = pattern.match(event.raw_message)
@@ -178,7 +258,7 @@ async def _(event: GroupMessageEvent):
 
 @admin_cmd_unban.handle()
 async def _(event: GroupMessageEvent):
-    if event.group_id != ADMIN_GROUP:
+    if event.group_id not in ADMIN_GROUP:
         return
     pattern = re.compile(r"/解封 (\d+)")
     match = pattern.match(event.raw_message)
@@ -198,7 +278,7 @@ async def _(event: GroupMessageEvent):
 
 @admin_cmd_warn.handle()
 async def _(event: GroupMessageEvent):
-    if event.group_id != ADMIN_GROUP:
+    if event.group_id not in ADMIN_GROUP:
         return
     pattern = re.compile(r"/警告 (\d+) (\d+)")
     match = pattern.match(event.raw_message)
@@ -206,7 +286,7 @@ async def _(event: GroupMessageEvent):
         msg = "格式错误，请输入 /警告 <QQ> <次数>"
         await admin_cmd_ban.send(msg, at_sender=True)
         return
-    warningData[match.group(1)] = match.group(2)
+    warningData[match.group(1)] = int(match.group(2))
     save_data()
     msg = match.group(1) + " 已被警告 " + match.group(2) + " 次"
     await admin_cmd_ban.send(msg, at_sender=True)
@@ -214,14 +294,13 @@ async def _(event: GroupMessageEvent):
 
 @admin_cmd_search.handle()
 async def _(event: GroupMessageEvent):
-    if event.group_id != ADMIN_GROUP:
+    if event.group_id not in ADMIN_GROUP:
         return
     pattern = re.compile(r"/查 (\d+)")
     match = pattern.match(event.raw_message)
     if not match:
         msg = "格式错误，请输入 /查 <QQ>"
         await admin_cmd_ban.send(msg, at_sender=True)
-        # await admin_cmd_ban.send(image(b64=(await text2image(msg, color="red", padding=10)).pic2bs4()))
         return
     if match.group(1) not in unionBanData:
         ban_tip = "此号码未被联合封禁"
@@ -235,5 +314,4 @@ async def _(event: GroupMessageEvent):
 {ban_tip}
 {warning_tip}
 """.strip()
-    logger.error(msg)
     await admin_cmd_ban.send(msg, at_sender=True)
