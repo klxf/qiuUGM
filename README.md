@@ -21,3 +21,6 @@
 - [ ] 黑名单关键词 — 自动撤回+警告含有黑名单词汇的图片
 
 ## 一些截图
+![image](https://github.com/klxf/qiuUGM/assets/31070597/3f058803-c5ba-4eb4-b9da-403d79e4433e) 
+![f146d9d235f2add57e63c56797ed8166](https://github.com/klxf/qiuUGM/assets/31070597/53376253-257b-486c-a058-d96cf9dc4649) 
+![03dc094870ee10db806b509464f71288](https://github.com/klxf/qiuUGM/assets/31070597/fb529e77-d236-41ae-a64b-ef4dfe73e8f6)
