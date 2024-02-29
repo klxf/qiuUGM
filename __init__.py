@@ -441,12 +441,12 @@ async def _(event: GroupMessageEvent):
 <f font_size=22 font_color=green>== 主命令 ==</f>
 `/UGM` <f font_color=gray>— 显示此帮助</f>
 `/UGM reload` <f font_color=gray>— 重新加载配置</f>
+`/UGM flag` <f font_color=gray>— 查看 FLAG</f>
 
 <f font_size=15>本插件是开源项目，遵循 GUN GPL v3.0 协议</f>
 <f font_size=15>github.com/klxf/qiuUGM</f>
 
 <f font_size=24 font_color=orange>叶秋可爱捏~</f>
-        
         """.strip()
         msg = image(b64=(await text2image(msg, color="white", padding=10)).pic2bs4())
         await admin_cmd_ban.send(msg)
@@ -455,3 +455,21 @@ async def _(event: GroupMessageEvent):
         loadConfig()
         msg = "已重新加载配置"
         await admin_cmd_ban.send(msg, at_sender=True)
+    if match.group(1) == "flag":
+        msg = f"""
+<f font_size=24 font_color=blue>qiuUGM FLAG</f>
+
+修改 FLAG 请编辑配置文件
+REMIND={FLAG['REMIND']}
+FORWARD={FLAG['FORWARD']}
+MUTE={FLAG['MUTE']}
+TXT2IMG={FLAG['TXT2IMG']}
+DEBUG={FLAG['DEBUG']}
+
+<f font_size=15>本插件是开源项目，遵循 GUN GPL v3.0 协议</f>
+<f font_size=15>github.com/klxf/qiuUGM</f>
+
+<f font_size=24 font_color=orange>叶秋可爱捏~</f>
+        """.strip()
+        msg = image(b64=(await text2image(msg, color="white", padding=10)).pic2bs4())
+        await admin_cmd_ban.send(msg)
