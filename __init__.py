@@ -18,7 +18,7 @@ usage：
 """.strip()
 __plugin_des__ = "qiuUGM"
 __plugin_cmd__ = ["/封禁", "/解封", "/警告", "/查", "/禁言", "/踢出", "/UGM"]
-__plugin_version__ = 0.1
+__plugin_version__ = 0.3
 __plugin_author__ = "Mr_Fang"
 __plugin_setting__ = {
     "level": 5,
@@ -50,7 +50,7 @@ def loadConfig():
     ADMIN_GROUP = config["ADMIN_GROUP"]
     FLAG = config["FLAG"]
     adult_base_url = str(ADULT_API_URL) + "/?key=" + str(API_KEY) + "&url="
-    ocr_base_url = str(OCR_API_URL) + "/?url="
+    ocr_base_url = str(OCR_API_URL) + "/?key=" + str(API_KEY) + "&url="
 
 def getConfig() -> Dict[str, Any]:
     try:
@@ -96,10 +96,14 @@ def save_data():
         json.dump(warningData, f, indent=4)
 
 
+def debugLogger(msg):
+    if FLAG['DEBUG']:
+        logger.info(msg)
+
+
 async def sendMsg2Admin(bot, group, msg):
     if FLAG['FORWARD'] is False:
         return
-
     if FLAG['TXT2IMG']:
         msg = image(b64=(await text2image(msg, color="white", padding=10)).pic2bs4())
     await bot.send_group_msg(group_id=GROUP_SETTINGS[str(group)], message=msg)
@@ -114,7 +118,7 @@ async def sendMsg2User(bot, group, msg):
 
 
 def checkBlackWords(msg: str):
-    # logger.info(f"Checking black words in {msg}")
+    debugLogger(f"Checking black words in {msg}")
     for type in blackWords:
         pattern = re.compile(blackWords[type])
         match = pattern.search(msg)
@@ -125,22 +129,34 @@ def checkBlackWords(msg: str):
 
 async def fetch_url(session, url):
     async with session.get(url) as response:
-        return await response.json()
+        try:
+            return await response.json()
+        except json.decoder.JSONDecodeError:
+            return {
+                "base64": "",
+                "result": [
+                    {
+                        "save_path": "",
+                        "data": []
+                    }
+                ]
+            }
 
 
 async def process_links(bot, event, match):
     async with aiohttp.ClientSession() as session:
         atasks = []
-        btasks = []
         for link in match:
             url = adult_base_url + link
             atasks.append(fetch_url(session, url))
         adult_responses = await asyncio.gather(*atasks)
+        btasks = []
         for link in match:
             url = ocr_base_url + link
             btasks.append(fetch_url(session, url))
         ocr_responses = await asyncio.gather(*btasks)
         for res_json in adult_responses:
+            debugLogger(f"Adult result: {res_json}")
             if res_json["rating_index"] == 3:
                 if str(event.user_id) not in warningData:
                     warningData[str(event.user_id)] = 1
@@ -159,24 +175,25 @@ async def process_links(bot, event, match):
 
                 # 提醒
                 msg = f"""
-                你发送了违规图片，已被警告 {warningData[str(event.user_id)]} 次
-                你将被禁止发言 {5 * warningData[str(event.user_id)]} 分钟
+你发送了违规图片，已被警告 {warningData[str(event.user_id)]} 次
+你将被禁止发言 {5 * warningData[str(event.user_id)]} 分钟
 
-                你所发送的内容已留档，若有异议可私聊管理人员申述
-                """.strip()
+你所发送的内容已留档，若有异议可私聊管理人员申述
+""".strip()
                 await sendMsg2User(bot, event.group_id, msg)
 
                 # 管理员提醒
                 admin_msg = f"""
-                {event.user_id} 在 {event.group_id} 发送了违规图片，目前已被警告 {warningData[str(event.user_id)]} 次
+{event.user_id} 在 {event.group_id} 发送了违规图片，目前已被警告 {warningData[str(event.user_id)]} 次
 
-                发送的违规内容：
-                {event.raw_message}
-                """.strip()
+发送的违规内容：
+{event.raw_message}
+""".strip()
                 await sendMsg2Admin(bot, GROUP_SETTINGS[str(event.group_id)], admin_msg)
 
         for res_json in ocr_responses:
             data = res_json["result"][0]["data"]
+            debugLogger(f"OCR result: {data}")
             blackWordType = checkBlackWords(str(data))
             if blackWordType is not None:
                 if str(event.user_id) not in warningData:
@@ -196,18 +213,18 @@ async def process_links(bot, event, match):
 
                 # 提醒
                 msg = f"""
-                你发送了{blackWordType}违规内容，已被警告 {warningData[str(event.user_id)]} 次
-                你将被禁止发言 {5 * warningData[str(event.user_id)]} 分钟
-                """.strip()
+你发送了{blackWordType}违规内容，已被警告 {warningData[str(event.user_id)]} 次
+你将被禁止发言 {5 * warningData[str(event.user_id)]} 分钟
+""".strip()
                 await sendMsg2User(bot, event.group_id, msg)
 
                 # 管理员提醒
                 admin_msg = f"""
-                {event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次
+{event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次
 
-                违规内容：
-                {event.raw_message}
-                """.strip()
+违规内容：
+{event.raw_message}
+""".strip()
                 await sendMsg2Admin(bot, event.group_id, admin_msg)
 
 
@@ -228,26 +245,26 @@ async def _(bot: Bot, event: GroupIncreaseNoticeEvent):
 
         # 提醒
         msg = f"""
-        {event.user_id} 已被联合封禁，自动踢出群聊。
-        若需解封请在群管群内使用 /解封 命令
-        """.strip()
+{event.user_id} 已被联合封禁，自动踢出群聊。
+若需解封请在群管群内使用 /解封 命令
+""".strip()
         await sendMsg2User(bot, event.group_id, msg)
 
         # 管理员提醒
         admin_msg = f"""
-        {event.user_id} 尝试加入 {event.group_id}，已踢出
-        若需解封请在使用 /解封 命令
-        """.strip()
+{event.user_id} 尝试加入 {event.group_id}，已踢出
+若需解封请在使用 /解封 命令
+""".strip()
         await sendMsg2Admin(bot, event.group_id, admin_msg)
 
 
 @msg_handler.handle()
 async def _(bot: Bot, event: GroupMessageEvent):
     if str(event.group_id) in GROUP_SETTINGS:
-        pattern = r'https://gchat\.qpic\.cn/gchatpic_new/\d+/\d+-\d+-[0-9A-F]+/0'
-        match = re.findall(pattern, event.raw_message)
-        if match:
-            await process_links(bot, event, match)
+        img_pattern = r'https://gchat\.qpic\.cn/gchatpic_new/\d+/\d+-\d+-[0-9A-F]+/0'
+        img_match = re.findall(img_pattern, event.raw_message)
+        if img_match:
+            await process_links(bot, event, img_match)
 
         blackWordType = checkBlackWords(event.raw_message)
         if blackWordType is not None:
@@ -268,18 +285,18 @@ async def _(bot: Bot, event: GroupMessageEvent):
 
             # 提醒
             msg = f"""
-            你发送了{blackWordType}违规内容，已被警告 {warningData[str(event.user_id)]} 次
-            你将被禁止发言 {5 * warningData[str(event.user_id)]} 分钟
-            """.strip()
+你发送了{blackWordType}违规内容，已被警告 {warningData[str(event.user_id)]} 次
+你将被禁止发言 {5 * warningData[str(event.user_id)]} 分钟
+""".strip()
             await sendMsg2User(bot, event.group_id, msg)
 
             # 管理员提醒
             admin_msg = f"""
-            {event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次
+{event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次
 
-            违规内容：
-            {event.raw_message}
-            """.strip()
+违规内容：
+{event.raw_message}
+""".strip()
             await sendMsg2Admin(bot, event.group_id, admin_msg)
 
 
@@ -376,7 +393,10 @@ async def _(bot: Bot, event: GroupMessageEvent):
         return
     groups = [key for key, value in GROUP_SETTINGS.items() if value == event.group_id]
     for group in groups:
-        await bot.set_group_ban(group_id=group, user_id=int(match.group(1)), duration=int(match.group(2))*60)
+        for user_info in await bot.get_group_member_list(group_id=int(group)):
+            if int(match.group(1)) == user_info["user_id"] and user_info["role"] == "member":
+                await bot.set_group_ban(group_id=int(group), user_id=int(match.group(1)), duration=int(match.group(2)) * 60)
+                break
     await admin_cmd_ban.send(f"已禁言 {match.group(1)} {match.group(2)} 分钟", at_sender=True)
 
 
@@ -392,7 +412,10 @@ async def _(bot: Bot, event: GroupMessageEvent):
         return
     groups = [key for key, value in GROUP_SETTINGS.items() if value == event.group_id]
     for group in groups:
-        await bot.set_group_kick(group_id=group, user_id=int(match.group(1)))
+        for user_info in await bot.get_group_member_list(group_id=int(group)):
+            if int(match.group(1)) == user_info["user_id"] and user_info["role"] == "member":
+                await bot.set_group_kick(group_id=int(group), user_id=int(match.group(1)))
+                break
     await admin_cmd_ban.send(f"已踢出 {match.group(1)}", at_sender=True)
 
 
@@ -404,25 +427,25 @@ async def _(event: GroupMessageEvent):
     match = pattern.match(event.raw_message)
     if not match:
         msg = f"""
-        <f font_size=24 font_color=blue>感谢使用 qiuUGM 联合群管插件</f>
-        
-        <f font_size=22 font_color=green>== 命令列表 ==</f>
-        `/封禁 <QQ>` <f font_color=gray>— 封禁指定账号</f>
-        `/解封 <QQ>` <f font_color=gray>— 解封指定账号</f>
-        `/警告 <QQ> <次数>` <f font_color=gray>— 警告指定账号</f>
-        `/查 <QQ>` <f font_color=gray>— 查看指定账号信息</f>
-        `/禁言 <QQ> <分钟>` <f font_color=gray>— 禁言指定账号</f>
-        `/踢出 <QQ>` <f font_color=gray>— 踢出指定账号</f>
-        `/封禁 <QQ>` <f font_color=gray>— 封禁指定账号</f>
-        
-        <f font_size=22 font_color=green>== 主命令 ==</f>
-        `/UGM` <f font_color=gray>— 显示此帮助</f>
-        `/UGM reload` <f font_color=gray>— 重新加载配置</f>
-        
-        <f font_size=15>本插件是开源项目，遵循 GUN GPL v3.0 协议</f>
-        <f font_size=15>https://github.com/klxf/qiuUGM</f>
-        
-        <f font_size=24 font_color=orange>叶秋可爱捏~</f>
+<f font_size=24 font_color=blue>感谢使用 qiuUGM 联合群管插件</f> <f font_color=gray>v{__plugin_version__}</f>
+
+<f font_size=22 font_color=green>== 命令列表 ==</f>
+`/封禁 <QQ>` <f font_color=gray>— 封禁指定账号</f>
+`/解封 <QQ>` <f font_color=gray>— 解封指定账号</f>
+`/警告 <QQ> <次数>` <f font_color=gray>— 警告指定账号</f>
+`/查 <QQ>` <f font_color=gray>— 查看指定账号信息</f>
+`/禁言 <QQ> <分钟>` <f font_color=gray>— 禁言指定账号</f>
+`/踢出 <QQ>` <f font_color=gray>— 踢出指定账号</f>
+`/封禁 <QQ>` <f font_color=gray>— 封禁指定账号</f>
+
+<f font_size=22 font_color=green>== 主命令 ==</f>
+`/UGM` <f font_color=gray>— 显示此帮助</f>
+`/UGM reload` <f font_color=gray>— 重新加载配置</f>
+
+<f font_size=15>本插件是开源项目，遵循 GUN GPL v3.0 协议</f>
+<f font_size=15>github.com/klxf/qiuUGM</f>
+
+<f font_size=24 font_color=orange>叶秋可爱捏~</f>
         
         """.strip()
         msg = image(b64=(await text2image(msg, color="white", padding=10)).pic2bs4())
