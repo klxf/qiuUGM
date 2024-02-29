@@ -17,14 +17,14 @@ usage：
     ........
 """.strip()
 __plugin_des__ = "qiuUGM"
-__plugin_cmd__ = ["/封禁", "/解封", "/警告", "/查", "/UGM"]
+__plugin_cmd__ = ["/封禁", "/解封", "/警告", "/查", "/禁言", "/踢出", "/UGM"]
 __plugin_version__ = 0.1
 __plugin_author__ = "Mr_Fang"
 __plugin_setting__ = {
     "level": 5,
     "default_status": True,
     "limit_superuser": False,
-    "cmd": ["/封禁", "/解封", "/警告", "/查", "/UGM"],
+    "cmd": __plugin_cmd__,
 }
 
 join_group_handle = on_notice(priority=1, block=False)
@@ -33,6 +33,24 @@ admin_cmd_ban = on_regex(r"/封禁", priority=5, block=True)
 admin_cmd_unban = on_regex(r"/解封", priority=5, block=True)
 admin_cmd_warn = on_regex(r"/警告", priority=5, block=True)
 admin_cmd_search = on_regex(r"/查", priority=5, block=True)
+admin_cmd_mute = on_regex(r"/禁言", priority=5, block=True)
+admin_cmd_kick = on_regex(r"/踢出", priority=5, block=True)
+admin_cmd_main = on_regex(r"/UGM", priority=5, block=True)
+
+def loadConfig():
+    global unionBanData, warningData, blackWords, config, ADULT_API_URL, OCR_API_URL, API_KEY, GROUP_SETTINGS, ADMIN_GROUP, FLAG, adult_base_url, ocr_base_url
+    unionBanData = getUnionBanData()
+    warningData = getWarningData()
+    blackWords = getBlackWordsData()
+    config = getConfig()
+    ADULT_API_URL = config["ADULT_API_URL"]
+    OCR_API_URL = config["OCR_API_URL"]
+    API_KEY = config["API_KEY"]
+    GROUP_SETTINGS = config["GROUP_SETTINGS"]
+    ADMIN_GROUP = config["ADMIN_GROUP"]
+    FLAG = config["FLAG"]
+    adult_base_url = str(ADULT_API_URL) + "/?key=" + str(API_KEY) + "&url="
+    ocr_base_url = str(OCR_API_URL) + "/?url="
 
 def getConfig() -> Dict[str, Any]:
     try:
@@ -79,18 +97,31 @@ def save_data():
 
 
 async def sendMsg2Admin(bot, group, msg):
+    if FLAG['FORWARD'] is False:
+        return
+
+    if FLAG['TXT2IMG']:
+        msg = image(b64=(await text2image(msg, color="white", padding=10)).pic2bs4())
     await bot.send_group_msg(group_id=GROUP_SETTINGS[str(group)], message=msg)
 
 
+async def sendMsg2User(bot, group, msg):
+    if FLAG['REMIND'] is False:
+        return
+    if FLAG['TXT2IMG']:
+        msg = image(b64=(await text2image(msg, color="white", padding=10)).pic2bs4())
+    await bot.send_group_msg(group_id=group, message=msg)
+
+
 def checkBlackWords(msg: str):
-    logger.info(f"Checking black words in {msg}")
+    # logger.info(f"Checking black words in {msg}")
     for type in blackWords:
-        logger.info(f"Checking {type}...")
         pattern = re.compile(blackWords[type])
         match = pattern.search(msg)
         if match:
             return type
     return None
+
 
 async def fetch_url(session, url):
     async with session.get(url) as response:
@@ -116,28 +147,34 @@ async def process_links(bot, event, match):
                 else:
                     warningData[str(event.user_id)] += 1
                 save_data()
-                msg = f"""
-你发送了违规图片，已被警告 {warningData[str(event.user_id)]} 次
-你将被禁止发言 {5*warningData[str(event.user_id)]} 分钟
 
-你所发送的内容已留档，若有异议可私聊管理人员申述
-""".strip()
+                logger.info(f"{event.user_id} 在 {event.group_id} 发送了评级 {res_json['rating_index']} 的图片，目前已被警告 {warningData[str(event.user_id)]} 次")
+
+                # 撤回
                 await bot.delete_msg(message_id=event.message_id)
+
+                # 禁言
                 if FLAG['MUTE']:
                     await bot.set_group_ban(group_id=event.group_id, user_id=event.user_id, duration=5*60*warningData[str(event.user_id)])
 
-                if FLAG['REMIND']:
-                    await msg_handler.send(msg, at_sender=True)
+                # 提醒
+                msg = f"""
+                你发送了违规图片，已被警告 {warningData[str(event.user_id)]} 次
+                你将被禁止发言 {5 * warningData[str(event.user_id)]} 分钟
 
+                你所发送的内容已留档，若有异议可私聊管理人员申述
+                """.strip()
+                await sendMsg2User(bot, event.group_id, msg)
+
+                # 管理员提醒
                 admin_msg = f"""
-{event.user_id} 在 {event.group_id} 发送了违规图片，目前已被警告 {warningData[str(event.user_id)]} 次
+                {event.user_id} 在 {event.group_id} 发送了违规图片，目前已被警告 {warningData[str(event.user_id)]} 次
 
-发送的违规内容：
-{event.raw_message}
-""".strip()
-                if FLAG['FORWARD']:
-                    await sendMsg2Admin(bot, GROUP_SETTINGS[str(event.group_id)], admin_msg)
-                return
+                发送的违规内容：
+                {event.raw_message}
+                """.strip()
+                await sendMsg2Admin(bot, GROUP_SETTINGS[str(event.group_id)], admin_msg)
+
         for res_json in ocr_responses:
             data = res_json["result"][0]["data"]
             blackWordType = checkBlackWords(str(data))
@@ -147,41 +184,35 @@ async def process_links(bot, event, match):
                 else:
                     warningData[str(event.user_id)] += 1
                 save_data()
+
                 logger.info(f"{event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次")
-                msg = f"""
-你发送了{blackWordType}违规内容，已被警告 {warningData[str(event.user_id)]} 次
-你将被禁止发言 {5 * warningData[str(event.user_id)]} 分钟
-""".strip()
+
+                # 撤回
                 await bot.delete_msg(message_id=event.message_id)
 
-                if FLAG['REMIND']:
-                    await msg_handler.send(msg, at_sender=True)
-
+                # 禁言
                 if FLAG['MUTE']:
                     await bot.set_group_ban(group_id=event.group_id, user_id=event.user_id, duration=5*60*warningData[str(event.user_id)])
 
+                # 提醒
+                msg = f"""
+                你发送了{blackWordType}违规内容，已被警告 {warningData[str(event.user_id)]} 次
+                你将被禁止发言 {5 * warningData[str(event.user_id)]} 分钟
+                """.strip()
+                await sendMsg2User(bot, event.group_id, msg)
+
+                # 管理员提醒
                 admin_msg = f"""
-{event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次
+                {event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次
 
-违规内容：
-{event.raw_message}
-""".strip()
-                if FLAG['FORWARD']:
-                    await sendMsg2Admin(bot, event.group_id, admin_msg)
+                违规内容：
+                {event.raw_message}
+                """.strip()
+                await sendMsg2Admin(bot, event.group_id, admin_msg)
 
 
-unionBanData = getUnionBanData()
-warningData = getWarningData()
-blackWords = getBlackWordsData()
-config = getConfig()
-ADULT_API_URL = config["ADULT_API_URL"]
-OCR_API_URL = config["OCR_API_URL"]
-API_KEY = config["API_KEY"]
-GROUP_SETTINGS = config["GROUP_SETTINGS"]
-ADMIN_GROUP = config["ADMIN_GROUP"]
-FLAG = config["FLAG"]
-adult_base_url = str(ADULT_API_URL) + "/?key=" + str(API_KEY) + "&url="
-ocr_base_url = str(OCR_API_URL) + "/?url="
+# 加载配置
+loadConfig()
 
 
 @join_group_handle.handle()
@@ -192,13 +223,22 @@ async def _(bot: Bot, event: GroupIncreaseNoticeEvent):
     if str(event.user_id) not in unionBanData:
         return
     else:
-        msg = f"""
-{event.user_id} 已被联合封禁，自动踢出群聊。
-若需解封请在群管群内使用 /解封 命令
-""".strip()
+        # 踢出
         await bot.set_group_kick(group_id=event.group_id, user_id=event.user_id)
-        if FLAG['REMIND']:
-            await join_group_handle.send(msg)
+
+        # 提醒
+        msg = f"""
+        {event.user_id} 已被联合封禁，自动踢出群聊。
+        若需解封请在群管群内使用 /解封 命令
+        """.strip()
+        await sendMsg2User(bot, event.group_id, msg)
+
+        # 管理员提醒
+        admin_msg = f"""
+        {event.user_id} 尝试加入 {event.group_id}，已踢出
+        若需解封请在使用 /解封 命令
+        """.strip()
+        await sendMsg2Admin(bot, event.group_id, admin_msg)
 
 
 @msg_handler.handle()
@@ -216,24 +256,31 @@ async def _(bot: Bot, event: GroupMessageEvent):
             else:
                 warningData[str(event.user_id)] += 1
             save_data()
+
             logger.info(f"{event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次")
-            msg = f"""
-你发送了{blackWordType}违规内容，已被警告 {warningData[str(event.user_id)]} 次
-你将被禁止发言 {5*warningData[str(event.user_id)]} 分钟
-""".strip()
+
+            # 撤回
             await bot.delete_msg(message_id=event.message_id)
-            if FLAG['REMIND']:
-                await msg_handler.send(msg, at_sender=True)
+
+            # 禁言
             if FLAG['MUTE']:
                 await bot.set_group_ban(group_id=event.group_id, user_id=event.user_id, duration=5*60*warningData[str(event.user_id)])
-            admin_msg = f"""
-{event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次
 
-违规内容：
-{event.raw_message}
-""".strip()
-            if FLAG['FORWARD']:
-                await sendMsg2Admin(bot, event.group_id, admin_msg)
+            # 提醒
+            msg = f"""
+            你发送了{blackWordType}违规内容，已被警告 {warningData[str(event.user_id)]} 次
+            你将被禁止发言 {5 * warningData[str(event.user_id)]} 分钟
+            """.strip()
+            await sendMsg2User(bot, event.group_id, msg)
+
+            # 管理员提醒
+            admin_msg = f"""
+            {event.user_id} 在 {event.group_id} 发送了包含 {blackWordType} 类违规的消息，目前已被警告 {warningData[str(event.user_id)]} 次
+
+            违规内容：
+            {event.raw_message}
+            """.strip()
+            await sendMsg2Admin(bot, event.group_id, admin_msg)
 
 
 @admin_cmd_ban.handle()
@@ -315,3 +362,51 @@ async def _(event: GroupMessageEvent):
 {warning_tip}
 """.strip()
     await admin_cmd_ban.send(msg, at_sender=True)
+
+
+@admin_cmd_mute.handle()
+async def _(bot: Bot, event: GroupMessageEvent):
+    if event.group_id not in ADMIN_GROUP:
+        return
+    pattern = re.compile(r"/禁言 (\d+) (\d+)")
+    match = pattern.match(event.raw_message)
+    if not match:
+        msg = "格式错误，请输入 /禁言 <QQ> <分钟>"
+        await admin_cmd_ban.send(msg, at_sender=True)
+        return
+    groups = [key for key, value in GROUP_SETTINGS.items() if value == event.group_id]
+    for group in groups:
+        await bot.set_group_ban(group_id=group, user_id=int(match.group(1)), duration=int(match.group(2))*60)
+    await admin_cmd_ban.send(f"已禁言 {match.group(1)} {match.group(2)} 分钟", at_sender=True)
+
+
+@admin_cmd_kick.handle()
+async def _(bot: Bot, event: GroupMessageEvent):
+    if event.group_id not in ADMIN_GROUP:
+        return
+    pattern = re.compile(r"/踢出 (\d+)")
+    match = pattern.match(event.raw_message)
+    if not match:
+        msg = "格式错误，请输入 /踢出 <QQ>"
+        await admin_cmd_ban.send(msg, at_sender=True)
+        return
+    groups = [key for key, value in GROUP_SETTINGS.items() if value == event.group_id]
+    for group in groups:
+        await bot.set_group_kick(group_id=group, user_id=int(match.group(1)))
+    await admin_cmd_ban.send(f"已踢出 {match.group(1)}", at_sender=True)
+
+
+@admin_cmd_main.handle()
+async def _(event: GroupMessageEvent):
+    if event.group_id not in ADMIN_GROUP:
+        return
+    pattern = re.compile(r"/UGM (\S+)")
+    match = pattern.match(event.raw_message)
+    if not match:
+        msg = "格式错误，请输入 /UGM <子命令>"
+        await admin_cmd_ban.send(msg, at_sender=True)
+        return
+    if match.group(1) == "reload":
+        loadConfig()
+        msg = "已重新加载配置"
+        await admin_cmd_ban.send(msg, at_sender=True)
