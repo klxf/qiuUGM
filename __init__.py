@@ -403,8 +403,30 @@ async def _(event: GroupMessageEvent):
     pattern = re.compile(r"/UGM (\S+)")
     match = pattern.match(event.raw_message)
     if not match:
-        msg = "格式错误，请输入 /UGM <子命令>"
-        await admin_cmd_ban.send(msg, at_sender=True)
+        msg = f"""
+        <f font_size=24 font_color=blue>感谢使用 qiuUGM 联合群管插件</f>
+        
+        <f font_size=22 font_color=green>== 命令列表 ==</f>
+        `/封禁 <QQ>` <f font_color=gray>— 封禁指定账号</f>
+        `/解封 <QQ>` <f font_color=gray>— 解封指定账号</f>
+        `/警告 <QQ> <次数>` <f font_color=gray>— 警告指定账号</f>
+        `/查 <QQ>` <f font_color=gray>— 查看指定账号信息</f>
+        `/禁言 <QQ> <分钟>` <f font_color=gray>— 禁言指定账号</f>
+        `/踢出 <QQ>` <f font_color=gray>— 踢出指定账号</f>
+        `/封禁 <QQ>` <f font_color=gray>— 封禁指定账号</f>
+        
+        <f font_size=22 font_color=green>== 主命令 ==</f>
+        `/UGM` <f font_color=gray>— 显示此帮助</f>
+        `/UGM reload` <f font_color=gray>— 重新加载配置</f>
+        
+        <f font_size=15>本插件是开源项目，遵循 GUN GPL v3.0 协议</f>
+        <f font_size=15>https://github.com/klxf/qiuUGM</f>
+        
+        <f font_size=24 font_color=orange>叶秋可爱捏~</f>
+        
+        """.strip()
+        msg = image(b64=(await text2image(msg, color="white", padding=10)).pic2bs4())
+        await admin_cmd_ban.send(msg)
         return
     if match.group(1) == "reload":
         loadConfig()
