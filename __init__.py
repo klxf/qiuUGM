@@ -266,6 +266,9 @@ async def _(bot: Bot, event: GroupMessageEvent):
         if img_match:
             await process_links(bot, event, img_match)
 
+        hidden_img_pattern = r'\[CQ:image,[^\]]+\]'
+        msg = re.sub(hidden_img_pattern, "[img]", event.raw_message)
+
         blackWordType = checkBlackWords(event.raw_message)
         if blackWordType is not None:
             if str(event.user_id) not in warningData:
