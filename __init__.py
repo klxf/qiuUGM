@@ -18,7 +18,7 @@ usage：
 """.strip()
 __plugin_des__ = "qiuUGM"
 __plugin_cmd__ = ["/封禁", "/解封", "/警告", "/查", "/禁言", "/踢出", "/UGM"]
-__plugin_version__ = 0.3
+__plugin_version__ = 0.4
 __plugin_author__ = "Mr_Fang"
 __plugin_setting__ = {
     "level": 5,
@@ -96,6 +96,8 @@ def save_data():
         json.dump(unionBanData, f, indent=4)
     with open(DATA_PATH / "qiuUGM" / "warning.json", "w", encoding="utf8") as f:
         json.dump(warningData, f, indent=4)
+    with open(DATA_PATH / "qiuUGM" / "config.json", "w", encoding="utf8") as f:
+        json.dump(config, f, indent=4)
 
 
 def debugLogger(msg):
@@ -123,7 +125,7 @@ def checkBlackWords(msg: str):
     debugLogger(f"Checking black words in {msg}")
     for type in blackWords:
         pattern = re.compile(blackWords[type])
-        match = pattern.search(msg)
+        match = pattern.search(msg.lower())
         if match:
             debugLogger(f"Black word is {match.group(0)}")
             return type
@@ -489,7 +491,7 @@ async def _(bot: Bot, event: GroupMessageEvent):
 async def _(event: GroupMessageEvent):
     if event.group_id not in ADMIN_GROUP:
         return
-    pattern = re.compile(r"/UGM (\S+)")
+    pattern = re.compile(r"/UGM (\S+)(?: (\S+))?")
     match = pattern.match(event.raw_message)
     if not match:
         msg = f"""
@@ -508,6 +510,7 @@ async def _(event: GroupMessageEvent):
 `/UGM` <f font_color=gray>— 显示此帮助</f>
 `/UGM reload` <f font_color=gray>— 重新加载配置</f>
 `/UGM flag` <f font_color=gray>— 查看 FLAG</f>
+`/UGM flag <FLAG>` <f font_color=gray>— 修改 FLAG</f>
 
 <f font_size=15>本插件是开源项目，遵循 GUN GPL v3.0 协议</f>
 <f font_size=15>github.com/klxf/qiuUGM</f>
@@ -522,20 +525,33 @@ async def _(event: GroupMessageEvent):
         msg = "已重新加载配置"
         await admin_cmd_ban.send(msg, at_sender=True)
     if match.group(1) == "flag":
-        msg = f"""
+        if match.group(2) is None:
+            msg = f"""
 <f font_size=24 font_color=blue>qiuUGM FLAG</f>
 
-修改 FLAG 请编辑配置文件
+DEBUG={FLAG['DEBUG']}
 REMIND={FLAG['REMIND']}
 FORWARD={FLAG['FORWARD']}
 MUTE={FLAG['MUTE']}
 TXT2IMG={FLAG['TXT2IMG']}
-DEBUG={FLAG['DEBUG']}
+LINK_KICK={FLAG['LINK_KICK']}
+LINK_MUTE={FLAG['LINK_MUTE']}
 
 <f font_size=15>本插件是开源项目，遵循 GUN GPL v3.0 协议</f>
 <f font_size=15>github.com/klxf/qiuUGM</f>
 
 <f font_size=24 font_color=orange>叶秋可爱捏~</f>
-        """.strip()
-        msg = image(b64=(await text2image(msg, color="white", padding=10)).pic2bs4())
-        await admin_cmd_ban.send(msg)
+""".strip()
+            msg = image(b64=(await text2image(msg, color="white", padding=10)).pic2bs4())
+            await admin_cmd_ban.send(msg)
+            return
+        if match.group(2) in FLAG:
+            logger.info(f"FLAG {match.group(2)} has been changed to {not FLAG[match.group(2)]}, operation by {event.user_id}")
+            config['FLAG'][match.group(2)] = not config['FLAG'][match.group(2)]
+            save_data()
+            loadConfig()
+            msg = f"{match.group(2)}={FLAG[match.group(2)]}"
+            await admin_cmd_ban.send(msg, at_sender=True)
+        else:
+            msg = "未找到对应的 FLAG"
+            await admin_cmd_ban.send(msg, at_sender=True)
