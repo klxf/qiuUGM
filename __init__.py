@@ -2,7 +2,7 @@ from configs.config import Config
 from configs.path_config import DATA_PATH
 from nonebot.adapters.onebot.v11.permission import GROUP
 from nonebot import on_command, on_notice, on_regex, on_message
-from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, GroupIncreaseNoticeEvent
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, GroupIncreaseNoticeEvent, GroupDecreaseNoticeEvent, GroupBanNoticeEvent
 from services.log import logger
 from utils.image_utils import text2image
 from utils.message_builder import image
@@ -28,6 +28,8 @@ __plugin_setting__ = {
 }
 
 join_group_handle = on_notice(priority=1, block=False)
+group_decrease_handle = on_notice(priority=1, block=False)
+group_mute_handle = on_notice(priority=1, block=False)
 msg_handler = on_message(permission=GROUP, priority=5)
 admin_cmd_ban = on_regex(r"/封禁", priority=5, block=True)
 admin_cmd_unban = on_regex(r"/解封", priority=5, block=True)
@@ -123,6 +125,7 @@ def checkBlackWords(msg: str):
         pattern = re.compile(blackWords[type])
         match = pattern.search(msg)
         if match:
+            debugLogger(f"Black word is {match.group(0)}")
             return type
     return None
 
@@ -234,6 +237,7 @@ loadConfig()
 
 @join_group_handle.handle()
 async def _(bot: Bot, event: GroupIncreaseNoticeEvent):
+    debugLogger(f"Trigger notice event, sub_type: {event.sub_type}")
     if str(event.group_id) not in GROUP_SETTINGS:
         return
 
@@ -258,6 +262,65 @@ async def _(bot: Bot, event: GroupIncreaseNoticeEvent):
         await sendMsg2Admin(bot, event.group_id, admin_msg)
 
 
+@group_decrease_handle.handle()
+async def _(bot: Bot, event: GroupDecreaseNoticeEvent):
+    debugLogger(f"Trigger notice event, sub_type: {event.sub_type}")
+    if str(event.group_id) not in GROUP_SETTINGS:
+        return
+    if FLAG['LINK_KICK'] is False:
+        return
+    if event.sub_type != "kick":
+        return
+    debugLogger(f"User {event.user_id} has been kicked from {event.group_id}, operation by {event.operator_id}")
+    groups = [key for key, value in GROUP_SETTINGS.items() if value == event.group_id]
+    for group in groups:
+        for user_info in await bot.get_group_member_list(group_id=int(group)):
+            if event.user_id == user_info["user_id"] and user_info["role"] == "member":
+                await bot.set_group_kick(group_id=int(group), user_id=event.user_id)
+                break
+
+
+@group_mute_handle.handle()
+async def _(bot: Bot, event: GroupBanNoticeEvent):
+    debugLogger(f"Trigger notice event, sub_type: {event.sub_type}")
+    if str(event.group_id) not in GROUP_SETTINGS:
+        return
+    if FLAG['LINK_MUTE'] is False:
+        return
+    debugLogger(f"User {event.user_id} has been muted in {event.group_id}, operation by {event.operator_id}")
+    if event.sub_type == "ban":
+        # 禁言事件
+        if event.user_id == 0:
+            # 全员禁言 user_id == 0
+            groups = [key for key, value in GROUP_SETTINGS.items() if value == GROUP_SETTINGS[str(event.group_id)]]
+            for group in groups:
+                await bot.set_group_whole_ban(group_id=int(group), enable=True)
+        else:
+            # 普通禁言
+            groups = [key for key, value in GROUP_SETTINGS.items() if value == GROUP_SETTINGS[str(event.group_id)]]
+            debugLogger(f"{GROUP_SETTINGS}")
+            for group in groups:
+                debugLogger(f"{group}")
+                for user_info in await bot.get_group_member_list(group_id=int(group)):
+                    if event.user_id == user_info["user_id"] and user_info["role"] == "member":
+                        await bot.set_group_ban(group_id=int(group), user_id=event.user_id, duration=event.duration)
+                        break
+    elif event.sub_type == "lift_ban":
+        # 解除禁言事件
+        if event.user_id == 0:
+            # 全员禁言 user_id == 0
+            groups = [key for key, value in GROUP_SETTINGS.items() if value == GROUP_SETTINGS[str(event.group_id)]]
+            for group in groups:
+                await bot.set_group_whole_ban(group_id=int(group), enable=False)
+        else:
+            # 普通禁言
+            groups = [key for key, value in GROUP_SETTINGS.items() if value == GROUP_SETTINGS[str(event.group_id)]]
+            for group in groups:
+                for user_info in await bot.get_group_member_list(group_id=int(group)):
+                    if event.user_id == user_info["user_id"] and user_info["role"] == "member":
+                        await bot.set_group_ban(group_id=int(group), user_id=event.user_id, duration=0)
+                        break
+
 @msg_handler.handle()
 async def _(bot: Bot, event: GroupMessageEvent):
     if str(event.group_id) in GROUP_SETTINGS:
@@ -269,7 +332,7 @@ async def _(bot: Bot, event: GroupMessageEvent):
         hidden_img_pattern = r'\[CQ:image,[^\]]+\]'
         msg = re.sub(hidden_img_pattern, "[img]", event.raw_message)
 
-        blackWordType = checkBlackWords(event.raw_message)
+        blackWordType = checkBlackWords(msg)
         if blackWordType is not None:
             if str(event.user_id) not in warningData:
                 warningData[str(event.user_id)] = 1
