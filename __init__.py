@@ -326,14 +326,27 @@ async def _(bot: Bot, event: GroupBanNoticeEvent):
 @msg_handler.handle()
 async def _(bot: Bot, event: GroupMessageEvent):
     if str(event.group_id) in GROUP_SETTINGS:
+        # 提前解析聊天记录
+        forward_pattern = r'\[(?:CQ:)?forward(?:,|:)id=([^\]]+)\]'
+        forward_match = re.search(forward_pattern, event.raw_message)
+        if forward_match:
+            forward_id = forward_match.group(1)
+            forward_json = await bot.get_forward_msg(message_id=forward_id)
+            msg = "；".join([f"{message['sender']['nickname']}：{message['content']}" for message in forward_json['messages']])
+        else:
+            msg = event.raw_message
+
+        # 检查图片
         img_pattern = r'https://gchat\.qpic\.cn/gchatpic_new/\d+/\d+-\d+-[0-9A-F]+/0'
-        img_match = re.findall(img_pattern, event.raw_message)
+        img_match = re.findall(img_pattern, msg)
         if img_match:
             await process_links(bot, event, img_match)
 
+        # (json|image) 消息具有 BlackWords 检查的豁免权
         hidden_cq_pattern = r'\[CQ:(json|image),[^\]]+\]'
-        msg = re.sub(hidden_cq_pattern, "[CQ]", event.raw_message)
+        msg = re.sub(hidden_cq_pattern, "[CQ]", msg)
 
+        # 检查 BlackWords
         blackWordType = checkBlackWords(msg)
         if blackWordType is not None:
             if str(event.user_id) not in warningData:
