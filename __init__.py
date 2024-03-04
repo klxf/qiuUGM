@@ -331,8 +331,8 @@ async def _(bot: Bot, event: GroupMessageEvent):
         if img_match:
             await process_links(bot, event, img_match)
 
-        hidden_img_pattern = r'\[CQ:image,[^\]]+\]'
-        msg = re.sub(hidden_img_pattern, "[img]", event.raw_message)
+        hidden_cq_pattern = r'\[CQ:(json|image),[^\]]+\]'
+        msg = re.sub(hidden_cq_pattern, "[CQ]", event.raw_message)
 
         blackWordType = checkBlackWords(msg)
         if blackWordType is not None:
