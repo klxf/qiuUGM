@@ -336,6 +336,15 @@ async def _(bot: Bot, event: GroupMessageEvent):
         else:
             msg = event.raw_message
 
+        # 检查骰子
+        if FLAG['BAN_DICE']:
+            dice_pattern = r'^&#91;骰子&#93;'
+            dice_match = re.search(dice_pattern, msg)
+            debugLogger(f"Checking dice in {msg}, result: {dice_match}")
+            if dice_match:
+                await bot.delete_msg(message_id=event.message_id)
+                return
+
         # 检查图片
         img_pattern = r'https://gchat\.qpic\.cn/gchatpic_new/\d+/\d+-\d+-[0-9A-F]+/0'
         img_match = re.findall(img_pattern, msg)
