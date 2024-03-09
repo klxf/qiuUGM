@@ -17,7 +17,7 @@ usage：
     ........
 """.strip()
 __plugin_des__ = "qiuUGM"
-__plugin_cmd__ = ["/封禁", "/解封", "/警告", "/查", "/禁言", "/踢出", "/UGM"]
+__plugin_cmd__ = ["/封禁", "/解封", "/警告", "/查", "/禁言", "/踢出", "/加白", "/UGM"]
 __plugin_version__ = 0.4
 __plugin_author__ = "Mr_Fang"
 __plugin_setting__ = {
@@ -37,14 +37,16 @@ admin_cmd_warn = on_regex(r"/警告", priority=5, block=True)
 admin_cmd_search = on_regex(r"/查", priority=5, block=True)
 admin_cmd_mute = on_regex(r"/禁言", priority=5, block=True)
 admin_cmd_kick = on_regex(r"/踢出", priority=5, block=True)
+admin_cmd_white = on_regex(r"/加白", priority=5, block=True)
 admin_cmd_main = on_regex(r"/UGM", priority=5, block=True)
 
 def loadConfig():
-    global unionBanData, warningData, blackWords, config, ADULT_API_URL, OCR_API_URL, API_KEY, GROUP_SETTINGS, ADMIN_GROUP, FLAG, adult_base_url, ocr_base_url
+    global unionBanData, warningData, blackWords, config, whitelist, ADULT_API_URL, OCR_API_URL, API_KEY, GROUP_SETTINGS, ADMIN_GROUP, FLAG, adult_base_url, ocr_base_url
     unionBanData = getUnionBanData()
     warningData = getWarningData()
     blackWords = getBlackWordsData()
     config = getConfig()
+    whitelist = getWhiteList()
     ADULT_API_URL = config["ADULT_API_URL"]
     OCR_API_URL = config["OCR_API_URL"]
     API_KEY = config["API_KEY"]
@@ -90,6 +92,15 @@ def getWarningData() -> Dict[Any, Any]:
     return data
 
 
+def getWhiteList() -> Dict[Any, Any]:
+    try:
+        with open(DATA_PATH / "qiuUGM" / "whitelist.json", "r", encoding="utf8") as f:
+            data = json.load(f)
+    except (ValueError, FileNotFoundError):
+        data = {}
+    return data
+
+
 def save_data():
     global unionBanData, warningData
     with open(DATA_PATH / "qiuUGM" / "unionban.json", "w", encoding="utf8") as f:
@@ -98,6 +109,8 @@ def save_data():
         json.dump(warningData, f, indent=4)
     with open(DATA_PATH / "qiuUGM" / "config.json", "w", encoding="utf8") as f:
         json.dump(config, f, indent=4)
+    with open(DATA_PATH / "qiuUGM" / "whitelist.json", "w", encoding="utf8") as f:
+        json.dump(whitelist, f, indent=4)
 
 
 def debugLogger(msg):
@@ -336,6 +349,26 @@ async def _(bot: Bot, event: GroupMessageEvent):
         else:
             msg = event.raw_message
 
+        # 白名单用户豁免
+        if event.user_id in whitelist['user']:
+            await sendMsg2Admin(bot, event.group_id, f"白名单内的 {event.user_id} 在 {event.group_id} 发送了消息：{msg}")
+            return
+
+        # 检查图片
+        img_pattern = r'https://gchat\.qpic\.cn/gchatpic_new/\d+/\d+-\d+-[0-9A-F]+/0'
+        img_match = re.findall(img_pattern, msg)
+        if img_match:
+            for img_url in img_match:
+                hash_match = re.search(r'([0-9A-F]{32})', img_url)
+                if hash_match[0] in whitelist['hash']:
+                    img_match.remove(img_url)
+            debugLogger(img_match)
+            await process_links(bot, event, img_match)
+
+        # (json|image) 消息具有 BlackWords 检查的豁免权
+        hidden_cq_pattern = r'\[CQ:(json|image),[^\]]+\]'
+        msg = re.sub(hidden_cq_pattern, "[CQ]", msg)
+
         # 检查骰子
         if FLAG['BAN_DICE']:
             dice_pattern = r'^&#91;骰子&#93;'
@@ -344,16 +377,6 @@ async def _(bot: Bot, event: GroupMessageEvent):
             if dice_match:
                 await bot.delete_msg(message_id=event.message_id)
                 return
-
-        # 检查图片
-        img_pattern = r'https://gchat\.qpic\.cn/gchatpic_new/\d+/\d+-\d+-[0-9A-F]+/0'
-        img_match = re.findall(img_pattern, msg)
-        if img_match:
-            await process_links(bot, event, img_match)
-
-        # (json|image) 消息具有 BlackWords 检查的豁免权
-        hidden_cq_pattern = r'\[CQ:(json|image),[^\]]+\]'
-        msg = re.sub(hidden_cq_pattern, "[CQ]", msg)
 
         # 检查 BlackWords
         blackWordType = checkBlackWords(msg)
@@ -507,6 +530,31 @@ async def _(bot: Bot, event: GroupMessageEvent):
                 await bot.set_group_kick(group_id=int(group), user_id=int(match.group(1)))
                 break
     await admin_cmd_ban.send(f"已踢出 {match.group(1)}", at_sender=True)
+
+
+@admin_cmd_white.handle()
+async def _(bot: Bot, event: GroupMessageEvent):
+    if event.group_id not in ADMIN_GROUP:
+        return
+    pattern = re.compile(r"/加白 (QQ|图片) (\S+)")
+    match = pattern.match(event.raw_message)
+    if not match:
+        msg = "格式错误，请输入 /加白 (QQ|图片) <QQ|[图片]>"
+        await admin_cmd_ban.send(msg, at_sender=True)
+        return
+    if match.group(1) == "QQ":
+        whitelist['user'].append(int(match.group(2)))
+        save_data()
+        await admin_cmd_ban.send(f"已加入白名单 {match.group(2)}", at_sender=True)
+    elif match.group(1) == "图片":
+        hash_match = re.search(r'([0-9A-F]{32})', match.group(2))
+        if hash_match:
+            if hash_match[0] not in whitelist['hash']:
+                whitelist['hash'].append(hash_match[0])
+                await admin_cmd_ban.send(f"{hash_match[0]} 已加入白名单", at_sender=True)
+            else:
+                await admin_cmd_ban.send(f"此图片已在白名单中", at_sender=True)
+        save_data()
 
 
 @admin_cmd_main.handle()
